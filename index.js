@@ -71,3 +71,75 @@ async function run() {
     app.get("/", (req, res) => {
       res.send("Lesson Lab is coocking.............");
     });
+
+    // ------------------------- USER ROUTES ---------------------------------
+
+    app.post("/register", async (req, res) => {
+      try {
+        const user = req.body;
+
+        if (!user.email) {
+          return res.status(400).send({
+            success: false,
+            message: "Email required",
+          });
+        }
+
+        // 1️⃣ Check if user already exists
+        const existingUser = await UserCollection.findOne({
+          email: user.email,
+        });
+
+        if (existingUser) {
+          return res.status(200).send({
+            success: true,
+            message: "User already registered",
+          });
+        }
+
+        // 2️⃣ Insert only if not exists
+        const result = await UserCollection.insertOne(user);
+
+        res.status(201).send({
+          success: true,
+          message: "User registered successfully",
+          data: result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.get("/me", verifyToken, async (req, res) => {
+      try {
+        const email = req.user.email;
+
+        const user = await UserCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).send({ message: "User not found" });
+        }
+
+        res.send({ success: true, user });
+      } catch (error) {
+        res.status(500).send({ success: false, message: error.message });
+      }
+    });
+    app.put("/update", verifyToken, async (req, res) => {
+      try {
+        const email = req.user.email;
+        const updateData = req.body;
+
+        const result = await UserCollection.updateOne(
+          { email },
+          { $set: updateData }
+        );
+
+        res.send({ success: true, message: "Profile updated", result });
+      } catch (error) {
+        res.status(500).send({ success: false, message: error.message });
+      }
+    });
