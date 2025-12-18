@@ -143,3 +143,31 @@ async function run() {
         res.status(500).send({ success: false, message: error.message });
       }
     });
+        // Admin-only: Get all users
+    // GET /admin/users
+    app.get("/admin/users", verifyToken, async (req, res) => {
+      try {
+        const requesterEmail = req.user.email;
+        const requester = await UserCollection.findOne({
+          email: requesterEmail,
+        });
+
+        if (!requester || requester.role !== "admin") {
+          return res.status(403).send({ message: "Forbidden (Admin only)" });
+        }
+
+        // 1️⃣ Aggregate lesson counts per author
+        const lessonCounts = await LessonColletion.aggregate([
+          {
+            $group: {
+              _id: "$author_email",
+              totalLessons: { $sum: 1 },
+            },
+          },
+        ]).toArray();
+
+        // Convert to a map for quick lookup
+        const lessonMap = {};
+        lessonCounts.forEach((l) => {
+          lessonMap[l._id] = l.totalLessons;
+        });
