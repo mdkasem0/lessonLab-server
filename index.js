@@ -770,3 +770,185 @@ async function run() {
         res.status(500).json({ success: false, message: error.message });
       }
     });
+ // Admin Dashboard Data
+    // ---------------------------
+    app.get("/admin/dashboard", verifyToken, async (req, res) => {
+      try {
+        const requesterEmail = req.user.email;
+        const requester = await UserCollection.findOne({
+          email: requesterEmail,
+        });
+
+        if (!requester || requester.role !== "admin") {
+          return res.status(403).send({ message: "Forbidden (Admin only)" });
+        }
+
+        // Total users
+        const totalUsers = await UserCollection.countDocuments();
+
+        // Total public lessons
+        const totalPublicLessons = await LessonColletion.countDocuments({
+          visibility: { $regex: /^public$/i },
+        });
+
+        // Total reported lessons
+        const totalReportedLessons = await lessonsReports.countDocuments();
+
+        // Most active contributors (top 5 users by number of lessons)
+        const mostActiveContributors = await LessonColletion.aggregate([
+          { $group: { _id: "$author_email", lessonCount: { $sum: 1 } } },
+          { $sort: { lessonCount: -1 } },
+          { $limit: 5 },
+          {
+            $lookup: {
+              from: "UserCollection",
+              localField: "_id",
+              foreignField: "email",
+              as: "user",
+            },
+          },
+          { $unwind: "$user" },
+          {
+            $project: {
+              email: "$_id",
+              name: "$user.name",
+              role: "$user.role",
+              lessonCount: 1,
+            },
+          },
+        ]).toArray();
+
+        // Today's new lessons
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const todaysNewLessons = await LessonColletion.countDocuments({
+          $expr: {
+            $gte: [{ $toDate: "$created_at" }, today],
+          },
+        });
+
+        // Last 7 days array
+        const last7Days = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          d.setHours(0, 0, 0, 0);
+          last7Days.push(d);
+        }
+
+        // Lesson growth (last 7 days) with $toDate
+        const lessonAgg = await LessonColletion.aggregate([
+          {
+            $addFields: {
+              createdDate: { $toDate: "$created_at" }, // convert string to Date
+            },
+          },
+          {
+            $match: {
+              createdDate: { $gte: last7Days[0] },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: "%Y-%m-%d", date: "$createdDate" },
+              },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]).toArray();
+
+        // User growth (last 7 days) with $toDate
+        const userAgg = await UserCollection.aggregate([
+          {
+            $addFields: {
+              createdDate: { $toDate: "$createdAt" }, // convert string to Date
+            },
+          },
+          {
+            $match: {
+              createdDate: { $gte: last7Days[0] },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: "%Y-%m-%d", date: "$createdDate" },
+              },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ]).toArray();
+
+        // Fill missing dates with 0
+        const formatData = (agg) => {
+          const map = {};
+          agg.forEach((item) => (map[item._id] = item.count));
+          return last7Days.map((date) => {
+            const dStr = date.toISOString().split("T")[0];
+            return { _id: dStr, count: map[dStr] || 0, date: dStr };
+          });
+        };
+
+        const lessonGrowth = formatData(lessonAgg);
+        const userGrowth = formatData(userAgg);
+
+        res.send({
+          success: true,
+          data: {
+            totalUsers,
+            totalPublicLessons,
+            totalReportedLessons,
+            mostActiveContributors,
+            todaysNewLessons,
+            lessonGrowth,
+            userGrowth,
+          },
+        });
+      } catch (error) {
+        res.status(500).send({ success: false, message: error.message });
+      }
+    });
+    // GET /admin/lessons?category=&visibility=&flagged=
+    app.get("/admin/lessons", verifyToken, async (req, res) => {
+      try {
+        const requesterEmail = req.user.email;
+        const requester = await UserCollection.findOne({
+          email: requesterEmail,
+        });
+
+        if (!requester || requester.role !== "admin") {
+          return res.status(403).send({ message: "Forbidden (Admin only)" });
+        }
+
+        const { category, visibility, flagged } = req.query;
+
+        const matchStage = {};
+
+        if (category) {
+          matchStage.category = { $regex: `^${category}$`, $options: "i" };
+        }
+
+        if (visibility) {
+          matchStage.visibility = { $regex: `^${visibility}$`, $options: "i" };
+        }
+
+        /* =======================
+       📊 STATS
+    ======================= */
+
+        const [publicCount, privateCount, flaggedAgg] = await Promise.all([
+          LessonColletion.countDocuments({
+            visibility: { $regex: /^public$/, $options: "i" },
+          }),
+          LessonColletion.countDocuments({
+            visibility: { $regex: /^private$/, $options: "i" },
+          }),
+          lessonsReports
+            .aggregate([{ $group: { _id: "$lessonId" } }, { $count: "total" }])
+            .toArray(),
+        ]);
+
+        const flaggedCount = flaggedAgg[0]?.total || 0;
